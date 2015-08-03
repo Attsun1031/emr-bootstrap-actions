@@ -259,10 +259,8 @@ def setJVMConfig(metaData)
   config << "-Xbootclasspath/p:"
   config << "-XX:PermSize=150M"
   config << "-XX:MaxPermSize=150M"
-
-  # TODO: pathを調査
   config << "-Dhive.config.resources=/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml"
-  config << "-Djava.library.path=/etc/hadoop/lib/native/"
+  config << "-Djava.library.path=/usr/lib/hadoop/lib/native/"
 
   return config.join("\n")
 end
@@ -282,7 +280,7 @@ def buildCLIWrapper
 
   config << "#!/bin/bash"
   config << "export PATH=/usr/lib/jvm/jre-1.8.0-openjdk/bin:$PATH"
-  config << "#{@tmp_presto_home}/presto-cli-executable.jar $@"
+  config << "#{@presto_home}/presto-server-#{@parsed[:version]}/presto-cli-executable.jar $@"
 
   return config.join("\n")
 end
@@ -390,7 +388,7 @@ exit $?
 end
 
 def launchPresto
-  sudo "service presto-server start"
+  run "service presto-server start"
 end
 
 # create presto user
