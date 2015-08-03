@@ -78,6 +78,8 @@ end
 @parsed = parseOptions
 puts "Installing Presto With Java 1.8 Requirement"
 
+@tmp_presto_home = "/home/hadoop/presto_tmp/presto-server-#{@parsed[:version]}"
+
 unless @parsed[:binary]
   @parsed[:binary] = "s3://support.elasticmapreduce/bootstrap-actions/presto/versions/#{@parsed[:version]}/presto-server-#{@parsed[:version]}.tar.gz"
     @user_binary = false
@@ -93,7 +95,7 @@ else
 end
 
 unless @parsed[:presto_home]
-  @presto_home = "/home/hadoop/.versions/presto-server-#{@parsed[:version]}/"
+  @presto_home = "/var/opt/presto/"
 else
   @presto_home = @parsed[:presto_home]
 end
@@ -123,6 +125,14 @@ rescue
   puts "Failed to install Java 1.8, killing BA"
   puts $!, $@
   exit 1
+end
+
+def setupPrestoUser
+  sudo "groupadd presto"
+  sudo "useradd -d #{@presto_home} -g presto -m -s /bin/false presto"
+  sudo "mkdir /mnt/var/log/presto"
+  sudo "chown -R presto:presto /var/log/presto"
+  sudo "chmod -R 755 /var/log/presto"
 end
 
 def getClusterMetaData
@@ -272,7 +282,7 @@ def buildCLIWrapper
 
   config << "#!/bin/bash"
   config << "export PATH=/usr/lib/jvm/jre-1.8.0-openjdk/bin:$PATH"
-  config << "#{@presto_home}/presto-cli-executable.jar $@"
+  config << "#{@tmp_presto_home}/presto-cli-executable.jar $@"
 
   return config.join("\n")
 end
@@ -374,13 +384,17 @@ exit $?
 ")
   end
   sudo "mv /tmp/presto-server /etc/init.d/presto-server"
-  sudo "sudo chown root:root /etc/init.d/presto-server"
-  sudo "sudo chmdo 755 /etc/init.d/presto-server"
+  sudo "chown root:root /etc/init.d/presto-server"
+  sudo "chmod 755 /etc/init.d/presto-server"
+  sudo "chkconfig --add presto-server"
 end
 
 def launchPresto
   sudo "service presto-server start"
 end
+
+# create presto user
+setupPrestoUser
 
 # Get The Cluster Information Object
 clusterMetaData = getClusterMetaData
@@ -390,47 +404,47 @@ run "aws --region us-east-1 s3 cp #{@parsed[:binary]} /tmp/presto-server.tar.gz"
 
 #Extract the Server to its new Home
 if @user_binary == true
-  @install_dir = File.dirname(@presto_home)
+  @install_dir = File.dirname(@tmp_presto_home)
   run "mkdir -p #{@install_dir}"
   run "tar -xf /tmp/presto-server.tar.gz -C #{@install_dir}"
 else
-  @install_dir = File.dirname(@presto_home)
+  @install_dir = File.dirname(@tmp_presto_home)
   run "mkdir -p #{@install_dir}"
   run "tar -xf /tmp/presto-server.tar.gz -C #{@install_dir}"
 end
 
-run "mkdir -p #{@presto_home}/etc/catalog/"
+run "mkdir -p #{@tmp_presto_home}/etc/catalog/"
 
 # Move LZO Library Into Presto Libs
-run "aws --region us-east-1 s3 cp s3://support.elasticmapreduce/bootstrap-actions/presto/hadoop-lzo-0.4.19.jar #{@presto_home}/plugin/hive-hadoop2/"
+run "aws --region us-east-1 s3 cp s3://support.elasticmapreduce/bootstrap-actions/presto/hadoop-lzo-0.4.19.jar #{@tmp_presto_home}/plugin/hive-hadoop2/"
 
 # Fix Launcher For Java 8
-open("#{@presto_home}/bin/launcher", 'w') do |f|
+open("#{@tmp_presto_home}/bin/launcher", 'w') do |f|
     f.puts(buildPrestoLauncher)
 end
 
 # Set config.properties
-open("#{@presto_home}/etc/config.properties", 'w') do |f|
+open("#{@tmp_presto_home}/etc/config.properties", 'w') do |f|
     f.puts(setConfigProperties(clusterMetaData))
 end
 
 # Set jvm.config
-open("#{@presto_home}/etc/jvm.config", 'w') do |f|
+open("#{@tmp_presto_home}/etc/jvm.config", 'w') do |f|
     f.puts(setJVMConfig(clusterMetaData))
 end
 
 # Set Hive.config
-open("#{@presto_home}/etc/catalog/hive.properties", 'w') do |f|
+open("#{@tmp_presto_home}/etc/catalog/hive.properties", 'w') do |f|
     f.puts(setHiveProperties(clusterMetaData,@parsed))
 end
 
 # Set node.properties
-open("#{@presto_home}/etc/node.properties", 'w') do |f|
+open("#{@tmp_presto_home}/etc/node.properties", 'w') do |f|
     f.puts(setNodeConfig(clusterMetaData))
 end
 
 # Set Log Properties
-open("#{@presto_home}/etc/log.properties", 'w') do |f|
+open("#{@tmp_presto_home}/etc/log.properties", 'w') do |f|
     f.puts(buildLogProperties)
 end
 
@@ -439,22 +453,25 @@ createRcScript
 # Create Presto Wrapper for CLI if CLI to be installed
 if @parsed[:cli] == true
   run "aws --region us-east-1 s3 cp #{@cli_jar} /tmp/presto-cli-executable.jar"
-  run "cp /tmp/presto-cli-executable.jar #{@presto_home}"
-  run "chmod +x #{@presto_home}/presto-cli-executable.jar"
+  run "cp /tmp/presto-cli-executable.jar #{@tmp_presto_home}"
+  run "chmod +x #{@tmp_presto_home}/presto-cli-executable.jar"
   if clusterMetaData['isMaster'] == true
-    open("/home/hadoop/presto-cli", 'w') do |f|
+    open("#{@tmp_presto_home}/bin/presto-cli", 'w') do |f|
         f.puts(buildCLIWrapper)
     end
-    run "chmod +x /home/hadoop/presto-cli"
-    sudo "ln -s /home/hadoop/presto-cli /usr/bin/"
+    run "chmod +x #{@tmp_presto_home}/bin/presto-cli"
   end
 end
+
+# move presto directory to presto user directory
+sudo "mv #{@tmp_presto_home} #{@presto_home}"
+sudo "chown -R presto:presto #{@presto_home}"
+sudo "chmod -R 755 #{@presto_home}"
 
 # Set Symnlinkg For Presto to Home-Folder
 if File.exist? "/home/hadoop/hive/bin/hive-init"
   run "rm -f home/hadoop/presto-server"
 end
-run "ln -s #{@presto_home} /home/hadoop/presto-server"
 
 def launchMetaStoreLauncher
   open("/tmp/start-metastore", 'w') do |f|
@@ -494,6 +511,7 @@ if clusterMetaData['isMaster'] == true
 end
 
 #launchPresto
+launchPresto
 
 puts "If Nothing Went Wrong, You should now have a Latest Version of Presto Installed"
 
