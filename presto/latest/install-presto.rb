@@ -29,9 +29,9 @@ def parseOptions
             config_options[:xmx] = xmx_value
       end
 
-      opt.on("-n",'--NurseryMem [ Nursery Memory Specified in Java -Xmn Formatting ]',
-             "Ex : 512M )") do |nurse|
-            config_options[:nurse] = nurse
+      opt.on("-t",'--task-max-memory [ Memory Specified in Presto task.max.memory ]',
+             "Ex : 512MB )") do |task_max_memory|
+            config_options[:task_max_memory] = task_max_memory
       end
 
       opt.on("-v",'--version [ Version of Presto to Install. See README for supported versions ]',
@@ -153,28 +153,30 @@ def getClusterMetaData
 end
 
 def determineMemory(type,parsed)
+  puts parsed
   memory = {}
 
   if type.include? 'small'
-    memory['max'] = 512
-    memory['nurse'] = 256
+    memory['xmx'] = "512M"
+    memory['task_max_memory'] = "256MB"
   elsif type.include? 'medium'
-    memory['max'] = 1024
-    memory['nurse'] = 512
-  elsif type.include? 'large'
-    memory['max'] = 2048
-    memory['nurse'] = 512
-  elsif type.include? 'xlarge'
-    memory['max'] = 4096
-    memory['nurse'] = 512
+    memory['xmx'] = "1G"
+    memory['task_max_memory'] = "512MB"
+  elsif type == 'r3.large'
+    memory['xmx'] = "8G"
+    memory['task_max_memory'] = "1GB"
+  elsif type == 'r3.xlarge'
+    memory['xmx'] = "16G"
+    memory['task_max_memory'] = "2GB"
+  elsif type == 'r3.2xlarge'
+    memory['xmx'] = "32G"
+    memory['task_max_memory'] = "4GB"
+  else
+    raise "Invalid instance type: #{type}"
   end
 
   if parsed[:xmx]
-    memory['max'] = parsed[:xmx]
-  end
-
-  if parsed[:nurse]
-    memory['nurse'] = parsed[:nurse]
+    memory['xmx'] = parsed[:xmx]
   end
 
   return memory
@@ -196,7 +198,7 @@ def setConfigProperties(metaData)
     config << 'sink.max-buffer-size=1GB'
     config << 'node-scheduler.include-coordinator=false'
     config << 'node-scheduler.location-aware-scheduling-enabled=false'
-    config << "task.max-memory=#{memory['max']}MB"
+    config << "task.max-memory=#{memory['task_max_memory']}"
     config << 'query.max-history=1000'
     config << 'query.max-age=60m'
     config << 'http-server.http.port=8080'
@@ -247,8 +249,7 @@ def setJVMConfig(metaData)
 
   config << '-verbose:class'
   config << '-server'
-  config << "-Xmx#{memory['max']}M"
-  config << "-Xmn#{memory['nurse']}M"
+  config << "-Xmx#{memory['xmx']}"
   config << "-XX:+UseConcMarkSweepGC"
   config << "-XX:+ExplicitGCInvokesConcurrent"
   config << "-XX:+CMSClassUnloadingEnabled"
